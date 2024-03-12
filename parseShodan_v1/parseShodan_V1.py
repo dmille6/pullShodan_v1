@@ -1,7 +1,47 @@
+# parseShodan_v1.py
+# https://github.com/dmille6/pullShodan_v1
+# darrellrhodesmiller@gmail.com
+#
+# ######################################################
+# Parse Shodan v1:
+# this is a very ugly and early script to parse shodan exports created by the shodan cli
+# and dump useful portions of that file into elasticsearch
+#
+# Notes/Thoughts:
+# the shodan json does not go directly into elasticsearch very well because of its structure.
+# elasticsearch has a limit of fieldnames, by default that limit is 1000 (it can be increased)
+# but shodan creates new field names for each application or vulnerability.. which creates
+# a field explosion.. and just makes it nearly impossible to import 1:1 from shodan json -> es.
+# if anyone knows a good way .. or finds a good way.. PLEASE let me know.
+#
+# i created a list of key important fields that i import directly. the rest of the stuff is left
+# out to prevent field explosions.. i have a field that has a direct link to the shodan webpage
+# for the entry to see the rest of the information.
+#
+# long term, probably something like mongoDB would be a better choice for storing this information
+# and can handle the field problems i am experiencing with elasticsearch.. but that would require
+# me to learn visualization and a new database structure.. and this seems good enough for now.
+#
+# Done:
+# -- parsing of a folder of shodan exported json files
+# -- dump *most* of the important data into elasticsearch
+# To Do:
+# -- improve this process (more efficient)
+# -- clean up code to make it more readable
+# -- create some sort of vulnerabilty scoring algorith to rate entries by how terrible they are
+# -- create templates and visualizations in kibana
+# -- save those templates and visualizations in files that can be included in this github, and
+#    a mechanism to import them automatically
+# -- create some clean simple reports that can be given to outside agencies
+# -- use the python shodan API instead of the shodan CLI to pull the data, just a cleaner approach
+# Wish i knew how to do:
+# -- import the entire shodan data entry into some type of data store for long term analysis,
+#    and to find trends over time
+#
+
 import os
 import json
 from tqdm import tqdm
-import asyncio
 from elasticsearch import Elasticsearch
 from pycvesearch import CVESearch
 from datetime import datetime
@@ -9,6 +49,7 @@ from pydantic import BaseModel
 from pprint import pprint
 
 class parseShodan:
+    # fields i've deemed as important, cant import everything because of issues mentioned above
     keyfields =  ['_shodan','asn','bgp','cpe','cpe23','data','device','devicetype','dns','domains','hash','hostnames','html','http','info','ip','ip_str','ipv6','isp','location','mac','org','os','opts','port','product','tags','timestamp','title','transport','version','vulns']
 
     def __init__(self):
@@ -19,8 +60,11 @@ class parseShodan:
         self.es_password = 'elastic' # default change this
         self.index_name = 'shodan_scan'
 
+        # creates a list of files in the ./data folder to process
+        # todo: change from hard coded folder to one given by user
         files_to_process=self.get_json_files_in_folder('./data')
 
+        # parse each item in the filelist
         for item in files_to_process:
             self.parse_file(item, './data')
 
@@ -44,7 +88,7 @@ class parseShodan:
             jsonData = json.loads(item)
             for field in self.get_data_key_fields(jsonData):
                 if field in self.keyfields:
-                    if field == 'vulns':
+                    if field == 'vulns': #because of the way shodan stores this information it has to be normalized/modified
                         shodanItem["vulns_count"]=self.count_vulns(jsonData["vulns"])
                         jsonData["vulns"] = self.list_vulns(jsonData["vulns"])
                         #shodanItem["vulns"].pop()
@@ -54,7 +98,7 @@ class parseShodan:
                         jsonData["mac"]=str(jsonData["mac"])
                         jsonData["mac"]=jsonData["mac"].replace('{','')
                         jsonData["mac"] = jsonData["mac"].replace('}', '')
-                    if field == 'location':
+                    if field == 'location': # put the geo ip info in a form ES can use
                         geo={}
                         geo['lon']=jsonData['location']['longitude']
                         geo['lat']=jsonData['location']['latitude']
@@ -88,10 +132,8 @@ class parseShodan:
             v_list.append(v_text)
         return v_list.copy()
 
-        # if cve_item.get('vulnerable_configuration'):
-        #     print('[+]: ', cve_item.get('vulnerable_configuration'))
-        #     for v in cve_item.get('vulnerable_configuration'):
-        #         print('   [+]: ', v['title'])
+    # not useful at a moment will probably be removed, a failed attempt at enrichment,
+    # just adds a lot of data that isnt really needed
     def query_cve(self, vuln_list):
         #todo: make cache to save query limit
         #todo: find max cvss
@@ -109,16 +151,6 @@ class parseShodan:
 
             if cve_item.get('vulnerable_product'):
                 vuln_product_list=self.clean_vulnerable_product(cve_item.get('vulnerable_product'))
-
-            # print("CVE ID:", cve_item['id'])
-            # print("Description:", cve_item['summary'])
-            # print("Published Date:", cve_item['Published'])
-            # print("Last Modified Date:", cve_item['Modified'])
-            # print("CVSS Score:", cve_item['cvss'])
-            # print("References:", cve_item['references'])
-            # print ("Vuln Config:", vuln_config_list)
-            # print ("Vuln Product:", vuln_product_list)
-            # print ("----===============================----")
 
             cve_dict['cve_id'] = cve_item['id']
             cve_dict['Summary'] = cve_item['summary']
